@@ -3588,7 +3588,7 @@ model_reasoning_effort = "high"
 
 use crate::CodexOAuthManagerState;
 use codex_plus_core::codex_oauth_auth::{CodexOAuthAccount, CodexOAuthDeviceCodeResponse, CodexOAuthStatus};
-use tauri::State;
+use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CodexOAuthStartLoginResult {
@@ -3612,97 +3612,85 @@ impl From<CodexOAuthDeviceCodeResponse> for CodexOAuthStartLoginResult {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn codex_oauth_start_login(
-    state: State<'_, CodexOAuthManagerState>,
-) -> impl std::future::Future<Output = CommandResult<CodexOAuthStartLoginResult>> + Send {
-    let manager = state.0.clone();
-    async move {
-        match manager.start_device_flow().await {
-            Ok(response) => ok("已启动 ChatGPT 登录流程。", response.into()),
-            Err(error) => failed(
-                &format!("启动 ChatGPT 登录失败：{error}"),
-                CodexOAuthStartLoginResult {
-                    device_code: String::new(),
-                    user_code: String::new(),
-                    verification_uri: String::new(),
-                    expires_in: 0,
-                    interval: 0,
-                },
-            ),
-        }
+pub async fn codex_oauth_start_login(
+    app: AppHandle,
+) -> CommandResult<CodexOAuthStartLoginResult> {
+    let manager = app.state::<CodexOAuthManagerState>().0.clone();
+    match manager.start_device_flow().await {
+        Ok(response) => ok("已启动 ChatGPT 登录流程。", response.into()),
+        Err(error) => failed(
+            &format!("启动 ChatGPT 登录失败：{error}"),
+            CodexOAuthStartLoginResult {
+                device_code: String::new(),
+                user_code: String::new(),
+                verification_uri: String::new(),
+                expires_in: 0,
+                interval: 0,
+            },
+        ),
     }
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn codex_oauth_poll_for_account(
+pub async fn codex_oauth_poll_for_account(
     device_code: String,
-    state: State<'_, CodexOAuthManagerState>,
-) -> impl std::future::Future<Output = CommandResult<Option<CodexOAuthAccount>>> + Send {
-    let manager = state.0.clone();
-    async move {
-        match manager.poll_for_token(&device_code).await {
-            Ok(account) => ok("ChatGPT 登录状态已更新。", account),
-            Err(error) => failed(
-                &format!("等待 ChatGPT 授权失败：{error}"),
-                None,
-            ),
-        }
+    app: AppHandle,
+) -> CommandResult<Option<CodexOAuthAccount>> {
+    let manager = app.state::<CodexOAuthManagerState>().0.clone();
+    match manager.poll_for_token(&device_code).await {
+        Ok(account) => ok("ChatGPT 登录状态已更新。", account),
+        Err(error) => failed(
+            &format!("等待 ChatGPT 授权失败：{error}"),
+            None,
+        ),
     }
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn codex_oauth_get_status(
-    state: State<'_, CodexOAuthManagerState>,
-) -> impl std::future::Future<Output = CommandResult<CodexOAuthStatus>> + Send {
-    let manager = state.0.clone();
-    async move {
-        let status = manager.get_status().await;
-        let message = if status.authenticated {
-            "已登录 ChatGPT 账号。"
-        } else {
-            "未登录 ChatGPT 账号。"
-        };
-        ok(message, status)
-    }
+pub async fn codex_oauth_get_status(
+    app: AppHandle,
+) -> CommandResult<CodexOAuthStatus> {
+    let manager = app.state::<CodexOAuthManagerState>().0.clone();
+    let status = manager.get_status().await;
+    let message = if status.authenticated {
+        "已登录 ChatGPT 账号。"
+    } else {
+        "未登录 ChatGPT 账号。"
+    };
+    ok(message, status)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn codex_oauth_remove_account(
+pub async fn codex_oauth_remove_account(
     account_id: String,
-    state: State<'_, CodexOAuthManagerState>,
-) -> impl std::future::Future<Output = CommandResult<()>> + Send {
-    let manager = state.0.clone();
-    async move {
-        match manager.remove_account(&account_id).await {
-            Ok(()) => ok("账号已移除。", ()),
-            Err(error) => failed(&format!("移除账号失败：{error}"), ()),
-        }
+    app: AppHandle,
+) -> CommandResult<()> {
+    let manager = app.state::<CodexOAuthManagerState>().0.clone();
+    match manager.remove_account(&account_id).await {
+        Ok(()) => ok("账号已移除。", ()),
+        Err(error) => failed(&format!("移除账号失败：{error}"), ()),
     }
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn codex_oauth_set_default_account(
+pub async fn codex_oauth_set_default_account(
     account_id: String,
-    state: State<'_, CodexOAuthManagerState>,
-) -> impl std::future::Future<Output = CommandResult<()>> + Send {
-    let manager = state.0.clone();
-    async move {
-        match manager.set_default_account(&account_id).await {
-            Ok(()) => ok("默认账号已设置。", ()),
-            Err(error) => failed(&format!("设置默认账号失败：{error}"), ()),
-        }
+    app: AppHandle,
+) -> CommandResult<()> {
+    let manager = app.state::<CodexOAuthManagerState>().0.clone();
+    match manager.set_default_account(&account_id).await {
+        Ok(()) => ok("默认账号已设置。", ()),
+        Err(error) => failed(&format!("设置默认账号失败：{error}"), ()),
     }
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn codex_oauth_logout(
-    state: State<'_, CodexOAuthManagerState>,
-) -> impl std::future::Future<Output = CommandResult<()>> + Send {
-    let manager = state.0.clone();
-    async move {
-        match manager.clear_auth().await {
-            Ok(()) => ok("已退出所有 ChatGPT 账号。", ()),
-            Err(error) => failed(&format!("退出失败：{error}"), ()),
-        }
+pub async fn codex_oauth_logout(
+    app: AppHandle,
+) -> CommandResult<()> {
+    let manager = app.state::<CodexOAuthManagerState>().0.clone();
+    match manager.clear_auth().await {
+        Ok(()) => ok("已退出所有 ChatGPT 账号。", ()),
+        Err(error) => failed(&format!("退出失败：{error}"), ()),
     }
 }
