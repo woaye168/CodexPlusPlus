@@ -12,6 +12,7 @@ async-trait = "0.1"
 base64.workspace = true
 directories.workspace = true
 futures-util = "0.3"
+log = "0.4"
 fs2.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true

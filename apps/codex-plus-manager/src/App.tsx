@@ -40,6 +40,11 @@ import {
   PowerOff,
   Plus,
   RefreshCw,
+  Sparkles,
+  Loader2,
+  User,
+  X,
+  LogOut,
   Rocket,
   Save,
   Settings,
@@ -68,6 +73,27 @@ import {
   type ModelWindowRow,
 } from "./model-windows";
 import { getLanguage, t, tf, toggleLanguage } from "@/i18n";
+
+type CodexOAuthAccount = {
+  id: string;
+  login: string;
+  authenticatedAt: number;
+  isDefault: boolean;
+};
+
+type CodexOAuthStatus = {
+  authenticated: boolean;
+  defaultAccountId: string | null;
+  accounts: CodexOAuthAccount[];
+};
+
+type CodexOAuthStartLoginResult = {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+};
 
 type Status = "ok" | "failed" | "not_implemented" | "not_checked" | string;
 
@@ -120,6 +146,8 @@ type PluginMarketplaceStatusResult = CommandResult<{
 type BackendSettings = {
   codexAppPath: string;
   codexExtraArgs: string[];
+  preserveCodexOfficialAuthOnSwitch: boolean;
+  unifyCodexSessionHistory: boolean;
   providerSyncEnabled: boolean;
   providerSyncSavedProviders: string[];
   providerSyncManualProviders: string[];
@@ -608,7 +636,7 @@ type StartupResult = CommandResult<{
   showUpdate: boolean;
 }>;
 
-type Route = "overview" | "relay" | "sessions" | "context" | "enhance" | "zedRemote" | "userScripts" | "recommendations" | "maintenance" | "about" | "settings";
+type Route = "overview" | "relay" | "sessions" | "context" | "enhance" | "zedRemote" | "userScripts" | "recommendations" | "maintenance" | "auth" | "about" | "settings";
 type Theme = "dark" | "light";
 
 const routes: Array<{ id: Route; label: string; icon: LucideIcon; badge?: string }> = [
@@ -621,6 +649,7 @@ const routes: Array<{ id: Route; label: string; icon: LucideIcon; badge?: string
   { id: "userScripts", label: t("脚本市场"), icon: FileCode2 },
   { id: "recommendations", label: t("推荐内容"), icon: ExternalLink },
   { id: "maintenance", label: t("安装维护"), icon: Wrench },
+  { id: "auth", label: t("认证"), icon: ShieldCheck },
   { id: "about", label: t("关于"), icon: Info },
   { id: "settings", label: t("设置"), icon: Settings },
 ];
@@ -628,6 +657,8 @@ const routes: Array<{ id: Route; label: string; icon: LucideIcon; badge?: string
 const defaultSettings: BackendSettings = {
   codexAppPath: "",
   codexExtraArgs: [],
+  preserveCodexOfficialAuthOnSwitch: false,
+  unifyCodexSessionHistory: false,
   providerSyncEnabled: false,
   providerSyncSavedProviders: [],
   providerSyncManualProviders: [],
@@ -759,6 +790,20 @@ export function App() {
   const [selectedProviderSyncTarget, setSelectedProviderSyncTarget] = useState("");
   const [removeOwnedData, setRemoveOwnedData] = useState(false);
   const [relaySwitching, setRelaySwitching] = useState(false);
+  const [codexOauthStatus, setCodexOauthStatus] = useState<CodexOAuthStatus | null>(null);
+  const [codexOauthPolling, setCodexOauthPolling] = useState<{
+    active: boolean;
+    userCode: string;
+    verificationUri: string;
+    deviceCode: string;
+    error: string | null;
+  }>({
+    active: false,
+    userCode: "",
+    verificationUri: "",
+    deviceCode: "",
+    error: null,
+  });
 
   const call = <T,>(command: string, args?: Record<string, unknown>) => invoke<T>(command, args);
 
@@ -1767,6 +1812,85 @@ export function App() {
     return result;
   };
 
+  const refreshCodexOauthStatus = async () => {
+    const result = await run(() => call<CodexOAuthStatus>("codex_oauth_get_status"));
+    if (result) {
+      setCodexOauthStatus(result);
+    }
+  };
+
+  const startCodexOauthLogin = async () => {
+    setCodexOauthPolling({
+      active: false,
+      userCode: "",
+      verificationUri: "",
+      deviceCode: "",
+      error: null,
+    });
+    const result = await run(() => call<CodexOAuthStartLoginResult>("codex_oauth_start_login"));
+    if (!result) return;
+    try {
+      await navigator.clipboard.writeText(result.userCode);
+    } catch {
+      // ignore
+    }
+    try {
+      await invoke("open_external_url", { url: result.verificationUri });
+    } catch {
+      // ignore
+    }
+    setCodexOauthPolling({
+      active: true,
+      userCode: result.userCode,
+      verificationUri: result.verificationUri,
+      deviceCode: result.deviceCode,
+      error: null,
+    });
+    const intervalMs = Math.max((result.interval || 5) + 3, 8) * 1000;
+    const expiresAt = Date.now() + result.expiresIn * 1000;
+    const timer = setInterval(async () => {
+      if (Date.now() > expiresAt) {
+        clearInterval(timer);
+        setCodexOauthPolling((current) => ({ ...current, active: false, error: t("登录超时，请重试") }));
+        return;
+      }
+      const pollResult = await run(() => call<CodexOAuthAccount | null>("codex_oauth_poll_for_account", { deviceCode: result.deviceCode }));
+      if (pollResult) {
+        clearInterval(timer);
+        setCodexOauthPolling((current) => ({ ...current, active: false }));
+        await refreshCodexOauthStatus();
+        showNotice(t("ChatGPT 登录"), t("账号登录成功。"), "ok");
+      }
+    }, intervalMs);
+  };
+
+  const cancelCodexOauthLogin = () => {
+    setCodexOauthPolling({
+      active: false,
+      userCode: "",
+      verificationUri: "",
+      deviceCode: "",
+      error: null,
+    });
+  };
+
+  const removeCodexOauthAccount = async (accountId: string) => {
+    await run(() => call("codex_oauth_remove_account", { accountId }));
+    await refreshCodexOauthStatus();
+  };
+
+  const setDefaultCodexOauthAccount = async (accountId: string) => {
+    await run(() => call("codex_oauth_set_default_account", { accountId }));
+    await refreshCodexOauthStatus();
+  };
+
+  const logoutCodexOauth = async () => {
+    await run(() => call("codex_oauth_logout"));
+    setCodexOauthStatus(null);
+    showNotice(t("ChatGPT 登录"), t("已退出所有账号。"), "ok");
+  };
+
+
   const actions = useMemo(
     () => ({
       refreshCurrent: () => navigate(route),
@@ -1915,9 +2039,15 @@ export function App() {
       uninstallWatcher: () => watcherAction("uninstall_watcher"),
       enableWatcher: () => watcherAction("enable_watcher"),
       disableWatcher: () => watcherAction("disable_watcher"),
+      refreshCodexOauthStatus,
+      startCodexOauthLogin,
+      cancelCodexOauthLogin,
+      removeCodexOauthAccount,
+      setDefaultCodexOauthAccount,
+      logoutCodexOauth,
       toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
     }),
-    [route, launchForm, settingsForm, settings, removeOwnedData, update, logs, diagnostics, theme, relayFiles, localSessions, zedRemoteProjects, selectedProviderSyncTarget, envConflicts, ccsProviders],
+    [route, launchForm, settingsForm, settings, removeOwnedData, update, logs, diagnostics, theme, relayFiles, localSessions, zedRemoteProjects, selectedProviderSyncTarget, envConflicts, ccsProviders, codexOauthStatus, codexOauthPolling],
   );
   const hasUpdate = update?.updateAvailable === true;
 
@@ -2064,6 +2194,13 @@ export function App() {
               actions={actions}
             />
           ) : null}
+          {route === "auth" ? (
+            <AuthScreen
+              status={codexOauthStatus}
+              polling={codexOauthPolling}
+              actions={actions}
+            />
+          ) : null}
           {route === "about" ? <AboutScreen overview={overview} update={update} logs={logs} diagnostics={diagnostics} actions={actions} /> : null}
           {route === "settings" ? (
             <SettingsScreen settings={settings} theme={theme} form={settingsForm} onFormChange={setSettingsForm} actions={actions} />
@@ -2190,6 +2327,12 @@ type Actions = {
   uninstallWatcher: () => Promise<void>;
   enableWatcher: () => Promise<void>;
   disableWatcher: () => Promise<void>;
+  refreshCodexOauthStatus: () => Promise<void>;
+  startCodexOauthLogin: () => Promise<void>;
+  cancelCodexOauthLogin: () => void;
+  removeCodexOauthAccount: (accountId: string) => Promise<void>;
+  setDefaultCodexOauthAccount: (accountId: string) => Promise<void>;
+  logoutCodexOauth: () => Promise<void>;
   toggleTheme: () => void;
   checkHealth: () => Promise<void>;
 };
@@ -3859,6 +4002,7 @@ function ContextScreen({
           onFormChange={onFormChange}
           actions={actions}
         />
+        <CodexAuthEnhancementsCard form={form} onFormChange={onFormChange} />
       </CardContent>
     </Panel>
   );
@@ -5064,6 +5208,7 @@ function routeSubtitle(route: Route) {
     userScripts: t("内置和用户自定义脚本清单"),
     recommendations: t("赞助商推荐与普通推荐"),
     maintenance: t("入口安装、修复、Watcher 与手动启动"),
+    auth: t("管理 ChatGPT OAuth 认证账号"),
     about: t("版本信息、项目链接、GitHub Release 更新、日志与诊断"),
     settings: t("主题、命令包装器和启动参数"),
   };
@@ -6753,6 +6898,164 @@ function formatDuration(startedAtMs: number): string {
 function stringifyError(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function CodexAuthEnhancementsCard({
+  form,
+  onFormChange,
+}: {
+  form: BackendSettings;
+  onFormChange: (value: BackendSettings) => void;
+}) {
+  return (
+    <div className="codex-auth-enhancements">
+      <div className="section-title">
+        <KeyRound className="icon" />
+        <span>{t("Codex 应用增强")}</span>
+      </div>
+      <label className="check-row block">
+        <input
+          type="checkbox"
+          checked={form.preserveCodexOfficialAuthOnSwitch}
+          onChange={(event) =>
+            onFormChange({ ...form, preserveCodexOfficialAuthOnSwitch: event.currentTarget.checked })
+          }
+        />
+        <div className="check-row-body">
+          <strong>{t("切换第三方时保留官方登录")}</strong>
+          <span>
+            {t("开启后可在使用第三方 API 时继续使用 Codex 官方插件、手机远程操作等功能。")}
+          </span>
+        </div>
+      </label>
+      <label className="check-row block">
+        <input
+          type="checkbox"
+          checked={form.unifyCodexSessionHistory}
+          onChange={(event) =>
+            onFormChange({ ...form, unifyCodexSessionHistory: event.currentTarget.checked })
+          }
+        />
+        <div className="check-row-body">
+          <strong>{t("统一 Codex 会话历史")}</strong>
+          <span>
+            {t("开启后官方与第三方会话将出现在同一历史列表中。")}
+          </span>
+        </div>
+      </label>
+    </div>
+  );
+}
+
+function AuthScreen({
+  status,
+  polling,
+  actions,
+}: {
+  status: CodexOAuthStatus | null;
+  polling: {
+    active: boolean;
+    userCode: string;
+    verificationUri: string;
+    deviceCode: string;
+    error: string | null;
+  };
+  actions: Actions;
+}) {
+  useEffect(() => {
+    void actions.refreshCodexOauthStatus();
+  }, [actions]);
+
+  return (
+    <Panel fill>
+      <CardHead title={t("认证")} detail={t("管理 ChatGPT 等 OAuth 认证账号。")} />
+      <CardContent>
+        <div className="auth-center-section">
+          <div className="auth-center-header">
+            <div className="auth-center-icon">
+              <Sparkles className="icon" />
+            </div>
+            <div>
+              <h3>ChatGPT (Codex OAuth)</h3>
+              <p>{t("管理 ChatGPT 账号")}</p>
+            </div>
+          </div>
+
+          <div className="auth-status-row">
+            <span>{t("认证状态")}</span>
+            <span className={`auth-status-badge ${status?.authenticated ? "ok" : ""}`}>
+              {status?.authenticated ? tf("{0} 个账号", [status.accounts.length]) : t("未认证")}
+            </span>
+          </div>
+
+          {status?.authenticated ? (
+            <div className="auth-accounts">
+              {status.accounts.map((account) => (
+                <div key={account.id} className="auth-account-row">
+                  <div className="auth-account-info">
+                    <User className="icon" />
+                    <span>{account.login}</span>
+                    {account.isDefault ? <span className="auth-account-badge">{t("默认")}</span> : null}
+                  </div>
+                  <div className="auth-account-actions">
+                    {!account.isDefault ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void actions.setDefaultCodexOauthAccount(account.id)}
+                      >
+                        {t("设为默认")}
+                      </Button>
+                    ) : null}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => void actions.removeCodexOauthAccount(account.id)}
+                      title={t("移除账号")}
+                    >
+                      <X className="icon" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {polling.active ? (
+            <div className="auth-polling-box">
+              <div className="auth-polling-title">
+                <Loader2 className="icon spin" />
+                <span>{t("等待授权中...")}</span>
+              </div>
+              <div className="auth-polling-code">
+                <span>{polling.userCode}</span>
+              </div>
+              <div className="auth-polling-link">
+                <a href={polling.verificationUri} target="_blank" rel="noreferrer">
+                  {polling.verificationUri}
+                </a>
+              </div>
+              <Button variant="ghost" size="sm" onClick={actions.cancelCodexOauthLogin}>
+                {t("取消")}
+              </Button>
+            </div>
+          ) : (
+            <Button variant="outline" className="auth-login-button" onClick={() => void actions.startCodexOauthLogin()}>
+              <Sparkles className="icon" />
+              {status?.authenticated ? t("添加其他账号") : t("使用 ChatGPT 登录")}
+            </Button>
+          )}
+
+          {status?.authenticated ? (
+            <Button variant="outline" className="auth-logout-button" onClick={() => void actions.logoutCodexOauth()}>
+              <LogOut className="icon" />
+              {t("退出所有账号")}
+            </Button>
+          ) : null}
+        </div>
+      </CardContent>
+    </Panel>
+  );
 }
 
 function loadInitialTheme(): Theme {

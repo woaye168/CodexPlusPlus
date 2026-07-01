@@ -80,6 +80,15 @@ fn apply_selected_relay_profile(
             auth_contents,
             settings.computer_use_guard_enabled,
         )?
+    } else if settings.preserve_codex_official_auth_on_switch
+        && relay.relay_mode != RelayMode::Official
+    {
+        validate_switch_profile_files(&relay)?;
+        crate::relay_config::apply_relay_profile_preserve_auth_to_home(
+            home,
+            &relay,
+            &common_config,
+        )?
     } else {
         validate_switch_profile_files(&relay)?;
         crate::relay_config::apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(

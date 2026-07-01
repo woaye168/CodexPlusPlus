@@ -7,6 +7,9 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, WindowEvent};
 
+use codex_plus_core::codex_oauth_auth::CodexOAuthManager;
+use std::sync::Arc;
+
 const TRAY_ID: &str = "codex_plus_tray";
 
 static APP_EXITING: AtomicBool = AtomicBool::new(false);
@@ -27,6 +30,9 @@ pub fn run() {
     let show_update = commands::startup_should_show_update();
     let run_result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(CodexOAuthManagerState(Arc::new(CodexOAuthManager::new(
+            &codex_plus_core::paths::default_app_state_dir(),
+        ))))
         .setup(move |app| {
             let url = if show_update {
                 "/index.html?showUpdate=1"
@@ -109,6 +115,12 @@ pub fn run() {
             commands::apply_relay_injection,
             commands::apply_pure_api_injection,
             commands::clear_relay_injection,
+            commands::codex_oauth_start_login,
+            commands::codex_oauth_poll_for_account,
+            commands::codex_oauth_get_status,
+            commands::codex_oauth_remove_account,
+            commands::codex_oauth_set_default_account,
+            commands::codex_oauth_logout,
             manager_exit_app,
             manager_hide_to_tray,
             update_tray_labels
@@ -312,3 +324,4 @@ fn acquire_single_instance_guard() -> Option<codex_plus_core::ports::LoopbackPor
         }
     }
 }
+pub struct CodexOAuthManagerState(pub Arc<CodexOAuthManager>);

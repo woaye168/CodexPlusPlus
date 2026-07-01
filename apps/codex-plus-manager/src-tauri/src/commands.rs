@@ -3583,3 +3583,108 @@ model_reasoning_effort = "high"
         assert!(result.message.contains("只允许打开 http 或 https 链接"));
     }
 }
+
+// ==================== Codex OAuth (ChatGPT) 认证命令 ====================
+
+use crate::CodexOAuthManagerState;
+use codex_plus_core::codex_oauth_auth::{CodexOAuthAccount, CodexOAuthDeviceCodeResponse, CodexOAuthStatus};
+use tauri::State;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CodexOAuthStartLoginResult {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+impl From<CodexOAuthDeviceCodeResponse> for CodexOAuthStartLoginResult {
+    fn from(response: CodexOAuthDeviceCodeResponse) -> Self {
+        Self {
+            device_code: response.device_code,
+            user_code: response.user_code,
+            verification_uri: response.verification_uri,
+            expires_in: response.expires_in,
+            interval: response.interval,
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn codex_oauth_start_login(
+    state: State<'_, CodexOAuthManagerState>,
+) -> CommandResult<CodexOAuthStartLoginResult> {
+    match state.0.start_device_flow().await {
+        Ok(response) => ok("已启动 ChatGPT 登录流程。", response.into()),
+        Err(error) => failed(
+            &format!("启动 ChatGPT 登录失败：{error}"),
+            CodexOAuthStartLoginResult {
+                device_code: String::new(),
+                user_code: String::new(),
+                verification_uri: String::new(),
+                expires_in: 0,
+                interval: 0,
+            },
+        ),
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn codex_oauth_poll_for_account(
+    device_code: String,
+    state: State<'_, CodexOAuthManagerState>,
+) -> CommandResult<Option<CodexOAuthAccount>> {
+    match state.0.poll_for_token(&device_code).await {
+        Ok(account) => ok("ChatGPT 登录状态已更新。", account),
+        Err(error) => failed(
+            &format!("等待 ChatGPT 授权失败：{error}"),
+            None,
+        ),
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn codex_oauth_get_status(
+    state: State<'_, CodexOAuthManagerState>,
+) -> CommandResult<CodexOAuthStatus> {
+    let status = state.0.get_status().await;
+    let message = if status.authenticated {
+        "已登录 ChatGPT 账号。"
+    } else {
+        "未登录 ChatGPT 账号。"
+    };
+    ok(message, status)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn codex_oauth_remove_account(
+    account_id: String,
+    state: State<'_, CodexOAuthManagerState>,
+) -> CommandResult<()> {
+    match state.0.remove_account(&account_id).await {
+        Ok(()) => ok("账号已移除。", ()),
+        Err(error) => failed(&format!("移除账号失败：{error}"), ()),
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn codex_oauth_set_default_account(
+    account_id: String,
+    state: State<'_, CodexOAuthManagerState>,
+) -> CommandResult<()> {
+    match state.0.set_default_account(&account_id).await {
+        Ok(()) => ok("默认账号已设置。", ()),
+        Err(error) => failed(&format!("设置默认账号失败：{error}"), ()),
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn codex_oauth_logout(
+    state: State<'_, CodexOAuthManagerState>,
+) -> CommandResult<()> {
+    match state.0.clear_auth().await {
+        Ok(()) => ok("已退出所有 ChatGPT 账号。", ()),
+        Err(error) => failed(&format!("退出失败：{error}"), ()),
+    }
+}

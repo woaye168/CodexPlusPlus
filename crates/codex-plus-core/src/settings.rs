@@ -185,6 +185,10 @@ pub struct BackendSettings {
     pub codex_app_path: String,
     #[serde(rename = "codexExtraArgs", default)]
     pub codex_extra_args: Vec<String>,
+    #[serde(rename = "preserveCodexOfficialAuthOnSwitch", default)]
+    pub preserve_codex_official_auth_on_switch: bool,
+    #[serde(rename = "unifyCodexSessionHistory", default)]
+    pub unify_codex_session_history: bool,
     #[serde(rename = "providerSyncEnabled", default)]
     pub provider_sync_enabled: bool,
     #[serde(rename = "providerSyncSavedProviders", default)]
@@ -330,6 +334,8 @@ impl Default for BackendSettings {
         Self {
             codex_app_path: String::new(),
             codex_extra_args: Vec::new(),
+            preserve_codex_official_auth_on_switch: false,
+            unify_codex_session_history: false,
             provider_sync_enabled: false,
             provider_sync_saved_providers: Vec::new(),
             provider_sync_manual_providers: Vec::new(),

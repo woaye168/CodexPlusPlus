@@ -422,6 +422,31 @@ pub fn apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
     }
 }
 
+/// 切换第三方供应商时保留现有 auth.json（官方登录态），只写入 config.toml。
+/// 生成的 config.toml 中会通过 experimental_bearer_token 携带第三方 API Key。
+pub fn apply_relay_profile_preserve_auth_to_home(
+    home: &Path,
+    profile: &RelayProfile,
+    common_config_contents: &str,
+) -> anyhow::Result<RelayApplyResult> {
+    let selected_common = if profile.use_common_config {
+        filter_common_config_for_profile(common_config_contents, profile)?
+    } else {
+        String::new()
+    };
+    let profile_config = complete_relay_profile_config(profile)?;
+    let config_with_common = merge_common_config_into_config(&profile_config, &selected_common)?;
+    let config_with_common =
+        preserve_unmanaged_live_context_entries(home, &config_with_common, common_config_contents)?;
+    let config_with_limits = apply_context_limits_to_config(
+        &config_with_common,
+        &profile.context_window,
+        &profile.auto_compact_limit,
+    )?;
+    let config_with_catalog = apply_model_catalog_to_config(home, profile, &config_with_limits)?;
+    apply_relay_config_file_to_home(home, &config_with_catalog)
+}
+
 pub fn apply_relay_profile_config_to_home_with_context(
     home: &Path,
     profile: &RelayProfile,
@@ -1861,6 +1886,56 @@ fn relay_profile_api_key(profile: &RelayProfile) -> String {
     if profile.relay_mode == crate::settings::RelayMode::Aggregate {
         return "codex-plus-aggregate".to_string();
     }
+
+pub fn codex_auth_has_login_material(auth_contents: &str) -> bool {
+    let trimmed = auth_contents.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+        return trimmed.contains("OPENAI_API_KEY") || trimmed.contains("\"tokens\"");
+    };
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+    obj.iter().any(|(key, value)| {
+        if key == "auth_mode" || key == "OPENAI_API_KEY" {
+            return false;
+        }
+        match value {
+            Value::Null => false,
+            Value::String(text) => !text.trim().is_empty(),
+            Value::Array(items) => !items.is_empty(),
+            Value::Object(map) => !map.is_empty(),
+            _ => true,
+        }
+    })
+}
+
+pub fn codex_auth_has_oauth_login_material(auth_contents: &str) -> bool {
+    let trimmed = auth_contents.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+        return trimmed.contains("\"tokens\"");
+    };
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+    obj.iter().any(|(key, value)| {
+        if key == "auth_mode" || key == "OPENAI_API_KEY" {
+            return false;
+        }
+        match value {
+            Value::Null => false,
+            Value::String(text) => !text.trim().is_empty(),
+            Value::Array(items) => !items.is_empty(),
+            Value::Object(map) => !map.is_empty(),
+            _ => true,
+        }
+    })
+}
     if profile.relay_mode == crate::settings::RelayMode::Official {
         return experimental_bearer_token_from_config(&profile.config_contents)
             .ok()

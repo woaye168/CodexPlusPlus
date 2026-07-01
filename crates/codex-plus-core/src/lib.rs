@@ -6,6 +6,7 @@ pub mod ccs_import;
 pub mod cdp;
 pub mod cli_wrapper;
 pub mod codex_home;
+pub mod codex_oauth_auth;
 pub mod codex_local_storage;
 pub mod codex_sqlite;
 mod computer_use_guard;
